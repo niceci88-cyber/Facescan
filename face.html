@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>สแกนใบหน้า - ระบบลงเวลาปฏิบัติราชการ</title>
+<!--
+  หน้าสแกนใบหน้าภายนอก (ใช้คู่กับระบบลงเวลา Apps Script)
+  ─────────────────────────────────────────────
+  ทำไมต้องแยกหน้า: Apps Script แสดงหน้าเว็บใน iframe ซ้อนของ Google ซึ่ง Safari บน iPhone ไม่ส่งภาพกล้องสดให้ (จอดำ)
+  หน้านี้ฝากไว้นอก Google (เช่น GitHub Pages) จึงเปิดกล้องสดได้ทุกเครื่อง
+  ไฟล์นี้ไม่มีข้อมูลของโรงเรียนใดฝังอยู่ — ทุกโรงเรียนใช้ไฟล์เดียวกันได้ (รับลิงก์ระบบมาจากพารามิเตอร์ ?api=)
+  ไม่ส่งรูปถ่ายออกไป ส่งเฉพาะตัวเลขใบหน้า 128 ค่า + พิกัด GPS
+-->
+<style>
+  :root { --purple:#7C5CFC; --purple-dark:#6645E0; --pink:#EC4899; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:#f5f7fa; color:#333; font-family:'Segoe UI', Tahoma, sans-serif; }
+  body { padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .topbar {
+    background: linear-gradient(120deg, var(--purple) 0%, #9B7BFF 55%, var(--pink) 130%);
+    border-radius: 16px; padding: 14px 18px; color:#fff; display:flex; align-items:center; gap:12px;
+    box-shadow: 0 8px 24px rgba(124,92,252,.25); max-width: 480px; margin: 0 auto 12px;
+  }
+  .topbar img { width:40px; height:40px; object-fit:contain; }
+  .topbar .t1 { font-weight:800; font-size:1.05rem; line-height:1.25; }
+  .topbar .t2 { font-size:.8rem; opacity:.9; font-weight:600; }
+  .card { background:#fff; border-radius:18px; padding:16px; max-width:480px; margin:0 auto;
+          box-shadow:0 8px 16px rgba(0,0,0,.08); text-align:center; }
+  .who { background:#f1effa; border-radius:12px; padding:10px 12px; font-size:15px; line-height:1.6; text-align:left; }
+  .who b { color:#4a2f7d; }
+  .stage { position:relative; width:100%; aspect-ratio:3/4; max-height:58vh; background:#111;
+           border-radius:14px; overflow:hidden; margin:12px auto 0; }
+  .stage video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
+  .ring { position:absolute; left:50%; top:46%; width:62%; aspect-ratio:3/4; transform:translate(-50%,-50%);
+          border:4px dashed rgba(255,255,255,.75); border-radius:50%; pointer-events:none; transition:border-color .2s; }
+  .ring.ok { border-color:#28a745; border-style:solid; } .ring.warn { border-color:#fd7e14; }
+  .steps { display:flex; justify-content:center; gap:6px; margin-top:8px; }
+  .steps span { width:28px; height:6px; border-radius:3px; background:#e0e0e0; }
+  .steps span.done { background:#28a745; }
+  .hint { margin-top:10px; min-height:50px; font-size:17px; font-weight:bold; line-height:1.45; }
+  .consent { text-align:left; font-size:13px; background:#f6f2ff; border:1px solid #e3d8f5; border-radius:10px;
+             padding:10px 12px; margin-top:12px; line-height:1.55; }
+  .consent label { display:flex; gap:8px; align-items:flex-start; font-weight:bold; margin-top:6px; }
+  .consent input { width:20px; height:20px; flex-shrink:0; margin-top:1px; }
+  button { width:100%; padding:15px; font-size:17px; font-weight:bold; border:none; border-radius:12px;
+           color:#fff; background:#6f42c1; margin-top:12px; cursor:pointer; }
+  button:disabled { background:#b9a9dd; }
+  .ok-box { background:#d4edda; border:2px solid #c3e6cb; color:#155724; border-radius:14px; padding:20px 16px;
+            font-size:18px; font-weight:bold; line-height:1.6; }
+  .err-box { background:#f8d7da; border:1px solid #f5c6cb; color:#721c24; border-radius:12px; padding:14px;
+             font-size:15px; font-weight:bold; line-height:1.55; margin-top:10px; }
+  .hidden { display:none !important; }
+  .muted { font-size:13px; color:#777; font-weight:normal; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <img id="logo" class="hidden" alt="">
+  <div>
+    <div class="t1" id="schoolName">ระบบลงเวลาปฏิบัติราชการ</div>
+    <div class="t2" id="pageTitle">🙂 สแกนใบหน้า</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="who" id="who">⏳ กำลังตรวจสอบลิงก์...</div>
+
+  <div id="scanArea" class="hidden">
+    <div class="consent hidden" id="consentBox">
+      ระบบจะแปลงใบหน้าของท่านเป็นชุดตัวเลข (ไม่เก็บรูปถ่าย) เพื่อใช้ยืนยันตัวตนตอนลงเวลาปฏิบัติราชการเท่านั้น
+      ข้อมูลนี้เป็นข้อมูลชีวภาพตาม พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล ท่านสามารถขอให้แอดมินลบได้ทุกเมื่อ
+      <label><input type="checkbox" id="consentChk"> ข้าพเจ้ายินยอมให้เก็บข้อมูลใบหน้าเพื่อการลงเวลา</label>
+    </div>
+    <div class="stage">
+      <video id="video" autoplay muted playsinline></video>
+      <div class="ring" id="ring"></div>
+    </div>
+    <div class="steps"><span id="s1"></span><span id="s2"></span><span id="s3"></span></div>
+    <div class="hint" id="hint"></div>
+    <button id="startBtn" class="hidden" onclick="start()">📷 เปิดกล้องและเริ่มสแกน</button>
+  </div>
+
+  <div id="resultArea" class="hidden"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
+<script>
+  var MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/';
+  var TIMEOUT_MS = 40000, YAW_FRONT = 0.12, YAW_TURN = 0.28, MIN_FACE_RATIO = 0.28;
+
+  var qs = new URLSearchParams(location.search);
+  var TOKEN = qs.get('t') || '';
+  var API = qs.get('api') || '';
+  var info = null, stream = null, running = false, modelsReady = null;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function hint(html, ring) {
+    $('hint').innerHTML = html;
+    $('ring').classList.remove('ok', 'warn');
+    if (ring) $('ring').classList.add(ring);
+  }
+  function step(n) { for (var i = 1; i <= 3; i++) $('s' + i).classList.toggle('done', i <= n); }
+
+  // ── เรียก Apps Script (POST แบบ text/plain ไม่ต้อง preflight; Apps Script อนุญาต CORS ให้คำตอบ JSON) ──
+  function api(payload) {
+    payload.faceApi = 1;
+    payload.token = TOKEN;
+    return fetch(API, { method: 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow' })
+      .then(function(r) { return r.json(); });
+  }
+
+  function fatal(msg) {
+    $('scanArea').classList.add('hidden');
+    $('resultArea').classList.remove('hidden');
+    $('resultArea').innerHTML = '<div class="err-box">' + msg + '</div>';
+  }
+
+  // ── เริ่มต้น: ตรวจลิงก์ ──
+  (function init() {
+    if (!TOKEN || !/^https:\/\/script\.google\.com\/(macros|a\/macros\/[^\/]+)\/s\/[\w-]+\/exec$/.test(API)) {
+      $('who').innerHTML = '❌ ลิงก์ไม่ถูกต้อง';
+      return fatal('กรุณาเปิดหน้านี้จากปุ่มในระบบลงเวลาเท่านั้น');
+    }
+    // โหลดโมเดลล่วงหน้าระหว่างรอ
+    modelsReady = Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+    api({ op: 'info' }).then(function(res) {
+      if (!res.ok) { $('who').innerHTML = '❌ ไม่สามารถใช้ลิงก์นี้ได้'; return fatal(esc(res.error)); }
+      info = res;
+      if (res.schoolName) { $('schoolName').textContent = res.schoolName; document.title = 'สแกนใบหน้า - ' + res.schoolName; }
+      if (res.logoUrl) { $('logo').src = res.logoUrl; $('logo').classList.remove('hidden'); }
+      var what = res.action === 'enroll' ? 'ลงทะเบียนใบหน้า' : ('ลงเวลา' + res.type);
+      $('pageTitle').textContent = '🙂 ' + what;
+      $('who').innerHTML = '👤 <b>' + esc(res.fullName) + '</b><br>📌 ' + what;
+      $('scanArea').classList.remove('hidden');
+      $('startBtn').classList.remove('hidden');
+      if (res.action === 'enroll') {
+        $('consentBox').classList.remove('hidden');
+        hint('อ่านข้อความด้านบน ติ๊กยินยอม แล้วกดปุ่มด้านล่าง');
+      } else {
+        hint('กดปุ่มด้านล่างเพื่อเปิดกล้อง<br><span class="muted">ระบบจะขออนุญาตใช้กล้องและตำแหน่ง (GPS) กรุณากด "อนุญาต"</span>');
+      }
+    }).catch(function() {
+      $('who').innerHTML = '❌ เชื่อมต่อระบบไม่สำเร็จ';
+      fatal('ตรวจสอบอินเทอร์เน็ต แล้วกลับไปกดปุ่มในหน้าระบบลงเวลาใหม่อีกครั้ง');
+    });
+  })();
+
+  // ── เปิดกล้อง (ต้องเรียกจากการกดปุ่มของผู้ใช้ เพื่อให้ iPhone อนุญาต) ──
+  function start() {
+    if (info.action === 'enroll' && !$('consentChk').checked) { hint('⚠️ กรุณาติ๊กยินยอมก่อน', 'warn'); return; }
+    $('startBtn').disabled = true;
+    $('consentBox').classList.add('hidden');
+    hint('⏳ กำลังเปิดกล้อง...');
+    var gp = navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+      ? navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+      : Promise.reject({ name: 'NotSupported' });
+    gp.then(function(s) {
+      stream = s;
+      var v = $('video');
+      v.srcObject = s;
+      return v.play();
+    }).then(function() {
+      $('startBtn').classList.add('hidden');
+      hint('⏳ กำลังโหลดระบบสแกนใบหน้า...<br><span class="muted">ครั้งแรกอาจใช้เวลา 10–20 วินาที</span>');
+      return modelsReady;
+    }).then(function() {
+      return scan(info.action === 'enroll' ? 3 : 2);
+    }).then(function(samples) {
+      return info.action === 'enroll' ? submitEnroll(samples) : submitCheckin(samples[samples.length - 1]);
+    }).catch(function(err) {
+      $('startBtn').disabled = false;
+      $('startBtn').classList.remove('hidden');
+      $('startBtn').textContent = '🔄 ลองใหม่';
+      var n = err && err.name;
+      if (n === 'NotAllowedError') hint('❌ ไม่ได้รับอนุญาตให้ใช้กล้อง<br><span class="muted">iPhone: ตั้งค่า ➜ Safari ➜ กล้อง ➜ อนุญาต แล้วกดลองใหม่</span>', 'warn');
+      else if (n === 'NotSupported') hint('❌ เบราว์เซอร์นี้เปิดกล้องไม่ได้<br><span class="muted">กรุณาเปิดลิงก์นี้ด้วย Safari หรือ Chrome (ไม่ใช่เบราว์เซอร์ใน LINE)</span>', 'warn');
+      else hint('❌ ' + esc((err && err.message) || 'สแกนไม่สำเร็จ'), 'warn');
+    });
+  }
+
+  function stopCamera() {
+    running = false;
+    if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; }
+  }
+
+  function analyze() {
+    var v = $('video');
+    return faceapi.detectAllFaces(v, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+      .withFaceLandmarks().withFaceDescriptors().then(function(res) {
+        if (!res || !res.length) return { msg: '🔍 ไม่พบใบหน้า กรุณาวางใบหน้าให้อยู่ในกรอบ' };
+        if (res.length > 1) return { msg: '⚠️ พบมากกว่า 1 ใบหน้า ให้มีเพียงผู้ลงเวลาคนเดียวในกล้อง' };
+        var f = res[0];
+        if (f.detection.box.width / v.videoWidth < MIN_FACE_RATIO) return { msg: '↔️ กรุณาขยับเข้าใกล้กล้องอีกนิด' };
+        var p = f.landmarks.positions, eL = { x: 0 }, eR = { x: 0 };
+        for (var i = 36; i <= 41; i++) eL.x += p[i].x / 6;
+        for (var j = 42; j <= 47; j++) eR.x += p[j].x / 6;
+        var yaw = (p[30].x - (eL.x + eR.x) / 2) / (Math.abs(eR.x - eL.x) || 1);
+        return { face: f, yaw: yaw, d: Array.from(f.descriptor).map(function(n) { return Math.round(n * 10000) / 10000; }) };
+      });
+  }
+  function dist(a, b) { var s = 0; for (var i = 0; i < a.length; i++) { var x = a[i] - b[i]; s += x * x; } return Math.sqrt(s); }
+
+  // มองตรง ➜ หันหน้า ➜ มองตรง (กันการยื่นรูปถ่าย)
+  function scan(want) {
+    running = true; step(0);
+    var phase = 'front1', samples = [], t0 = Date.now(), last = 0;
+    return new Promise(function(resolve, reject) {
+      function tick() {
+        if (!running) return reject(new Error('ยกเลิกแล้ว'));
+        if (Date.now() - t0 > TIMEOUT_MS) { stopCamera(); return reject(new Error('หมดเวลาสแกน กรุณาลองใหม่ในที่ที่มีแสงสว่างเพียงพอ')); }
+        analyze().then(function(r) {
+          if (!r.face) { hint(r.msg, 'warn'); return setTimeout(tick, 120); }
+          var front = Math.abs(r.yaw) < YAW_FRONT, turned = Math.abs(r.yaw) > YAW_TURN;
+          if (phase === 'front1') {
+            if (!front) hint('👀 กรุณามองตรงเข้ากล้อง', 'warn');
+            else { samples.push(r.d); step(1); phase = 'turn'; }
+          } else if (phase === 'turn') {
+            if (!turned) hint('↩️ ค่อย ๆ <b>หันหน้าไปทางซ้ายหรือขวา</b> เล็กน้อย');
+            else { step(2); phase = 'front2'; }
+          } else if (phase === 'front2') {
+            if (!front) hint('👀 ดีมาก! <b>หันกลับมามองตรง</b>', 'ok');
+            else if (dist(samples[0], r.d) > 0.45) {
+              samples = []; phase = 'front1'; step(0);
+              hint('⚠️ ใบหน้าเปลี่ยนระหว่างสแกน เริ่มใหม่ — มองตรงเข้ากล้อง', 'warn');
+            } else {
+              samples.push(r.d); last = Date.now();
+              if (samples.length >= want) { step(3); return resolve(samples); }
+              phase = 'extra'; hint('📸 ค้างไว้สักครู่...', 'ok');
+            }
+          } else if (phase === 'extra' && front && Date.now() - last > 500) {
+            samples.push(r.d); last = Date.now();
+            if (samples.length >= want) { step(3); return resolve(samples); }
+          }
+          setTimeout(tick, 80);
+        }).catch(reject);
+      }
+      hint('👀 มองตรงเข้ากล้อง ให้ใบหน้าอยู่ในกรอบ');
+      tick();
+    });
+  }
+
+  function showDone(msg) {
+    stopCamera();
+    $('scanArea').classList.add('hidden');
+    $('resultArea').classList.remove('hidden');
+    $('resultArea').innerHTML = '<div class="ok-box">' + msg + '</div>' +
+      '<p class="muted" style="margin-top:14px;">ปิดหน้านี้แล้วกลับไปที่หน้าระบบลงเวลาได้เลย<br>(หน้าระบบลงเวลาจะแสดงผลให้อัตโนมัติ)</p>' +
+      '<button onclick="window.close()" style="background:#495057;">ปิดหน้านี้</button>';
+  }
+  function showRetry(msg) {
+    hint('❌ ' + esc(msg), 'warn');
+    $('startBtn').disabled = false;
+    $('startBtn').textContent = '🔄 สแกนใหม่';
+    $('startBtn').classList.remove('hidden');
+  }
+
+  function submitEnroll(samples) {
+    stopCamera();
+    hint('⏳ กำลังบันทึกข้อมูลใบหน้า...', 'ok');
+    return api({ op: 'enroll', samples: samples, consent: true }).then(function(res) {
+      if (res.ok) showDone(esc(res.message));
+      else showRetry(res.error);
+    });
+  }
+
+  function submitCheckin(descriptor) {
+    stopCamera();
+    hint('⏳ กำลังดึงพิกัด GPS...', 'ok');
+    return new Promise(function(resolve, reject) {
+      if (!navigator.geolocation) return reject(new Error('อุปกรณ์นี้ไม่รองรับ GPS'));
+      navigator.geolocation.getCurrentPosition(resolve, function(e) {
+        reject(new Error(e.code === 1 ? 'กรุณาอนุญาตให้เข้าถึงตำแหน่ง (GPS) แล้วกดสแกนใหม่' :
+                         e.code === 3 ? 'ค้นหาพิกัดนานเกินไป (GPS Timeout) กรุณาลองใหม่' : 'ไม่สามารถระบุตำแหน่งได้'));
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+    }).then(function(pos) {
+      hint('⏳ กำลังบันทึกเวลา...', 'ok');
+      return api({ op: 'checkin', descriptor: descriptor, lat: pos.coords.latitude, lng: pos.coords.longitude });
+    }).then(function(res) {
+      if (res.ok) showDone(esc(res.message));
+      else showRetry(res.error);
+    });
+  }
+</script>
+</body>
+</html>
