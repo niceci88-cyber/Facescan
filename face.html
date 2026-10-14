@@ -222,7 +222,6 @@
         if (Date.now() - t0 > TIMEOUT_MS) { stopCamera(); return reject(new Error('หมดเวลาสแกน กรุณาลองใหม่ในที่ที่มีแสงสว่างเพียงพอ')); }
         analyze().then(function(r) {
           if (!r.face) { hint(r.msg, 'warn'); return setTimeout(tick, 120); }
-          var front = Math.abs(r.yaw) < YAW_FRONT, turned = Math.abs(r.yaw) > YAW_TURN;
           // มองตรงอย่างเดียว: เก็บภาพหน้าตรงทีละภาพ ห่างกัน 0.4 วินาที ทุกภาพต้องเป็นคนเดียวกับภาพแรก
           var front = Math.abs(r.yaw) < YAW_FRONT;
           if (!front) {
